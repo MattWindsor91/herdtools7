@@ -199,14 +199,14 @@ expr1:
   { Fetch($3, $1, $5, $7) }
 | IDENTIFIER LPAR args RPAR
   { ECall ($1,$3) }
-| WCAS LPAR expr COMMA expr COMMA expr RPAR
-  { ECas ($3,ExpctMem $5,$7,SC,SC,false) }
-| WCAS_EXPLICIT LPAR expr COMMA expr COMMA expr COMMA MEMORDER COMMA MEMORDER  RPAR
-  { ECas ($3,ExpctMem $5,$7,$9,$11,false) }
-| SCAS LPAR expr COMMA expr COMMA expr RPAR
-  { ECas ($3,ExpctMem $5,$7,SC,SC,true) }
-| SCAS_EXPLICIT LPAR expr COMMA expr COMMA expr COMMA MEMORDER COMMA MEMORDER  RPAR
-  { ECas ($3,ExpctMem $5,$7,$9,$11,true) }
+| WCAS LPAR expr COMMA expected COMMA expr RPAR
+  { ECas ($3,$5,$7,SC,SC,false) }
+| WCAS_EXPLICIT LPAR expr COMMA expected COMMA expr COMMA MEMORDER COMMA MEMORDER  RPAR
+  { ECas ($3,$5,$7,$9,$11,false) }
+| SCAS LPAR expr COMMA expected COMMA expr RPAR
+  { ECas ($3,$5,$7,SC,SC,true) }
+| SCAS_EXPLICIT LPAR expr COMMA expected COMMA expr COMMA MEMORDER COMMA MEMORDER  RPAR
+  { ECas ($3,$5,$7,$9,$11,true) }
 | SPINTRYLOCK LPAR expr RPAR
   { TryLock ($3,MutexLinux) }
 | SPINISLOCKED LPAR expr RPAR
@@ -227,6 +227,10 @@ args:
 args_ne:
 | expr { [$1] }
 | expr COMMA args_ne { $1 :: $3 }
+
+expected:
+| LAND IDENTIFIER { ExpctReg($2) }
+| expr { ExpctMem($1) }
 
 location:
 | IDENTIFIER { LoadReg($1) }
