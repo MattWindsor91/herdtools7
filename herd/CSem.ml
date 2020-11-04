@@ -154,7 +154,7 @@ module Make (Conf:Config)(V:Value.S)
         | C.ExpctMem m -> write_mem no_mo m v ii
         | C.ExpctReg r -> write_reg r v ii
 
-      let build_semantics_ecas expr is_data obj exp des success failure strong ii =
+      let build_semantics_ecas expr is_data {C.obj; exp; des; success; failure; strong} ii =
           (* Obtain location of "expected" value *)
           build_semantics_expected (fun e -> expr false e ii) exp >>= fun loc_exp ->
             (* Obtain location of object *)
@@ -277,9 +277,8 @@ module Make (Conf:Config)(V:Value.S)
             >>= (fun (v,l) ->
               fetch_op op v mo l ii)
 
-
-      | C.ECas(obj,exp,des,success,failure,strong) ->
-        build_semantics_ecas build_semantics_expr is_data obj exp des success failure strong ii
+      | C.ECas c ->
+        build_semantics_ecas build_semantics_expr is_data c ii
 
       | C.AtomicOpReturn (eloc,op,e,ret,a) ->
           begin match a with
@@ -448,6 +447,11 @@ module Make (Conf:Config)(V:Value.S)
             fun (l,v) ->
               M.mk_singleton_es (Act.SRCU (A.Location_global l,a,v)) ii
                 >>= fun _ -> M.unitT (ii.A.program_order_index, B.Next)
+(********************)
+          | C.SCas c -> 
+            (* TODO(@MattWindsor91): is is_data right here? *)
+              build_semantics_ecas build_semantics_expr false c ii
+              >>= fun _ -> M.unitT (ii.A.program_order_index, B.Next)
 (********************)
           | C.Symb _ -> Warn.fatal "No symbolic instructions allowed."
           | C.PCall (f,_) -> Warn.fatal "Procedure call %s in CSem" f

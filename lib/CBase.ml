@@ -66,6 +66,15 @@ let map_expected expr =
   | ExpctMem m -> ExpctMem (expr m)
   | ExpctReg r -> ExpctReg r
 
+type 'e cas =
+  { obj: 'e 
+  ; exp: 'e expected
+  ; des: 'e
+  ; success: mem_order
+  ; failure: mem_order
+  ; strong: bool
+  }
+
 type expression =
   | Const of ParsedConstant.v
   | LoadReg of reg
@@ -75,7 +84,7 @@ type expression =
   | CmpExchange of expression * expression * expression  * MemOrderOrAnnot.annot
   | Fetch of expression * Op.op * expression * mem_order
   | ECall of string * expression list
-  | ECas of expression * expression expected * expression * mem_order * mem_order * bool
+  | ECas of expression cas
   | TryLock of expression * mutex_kind
   | IsLocked of expression * mutex_kind
   | AtomicOpReturn of expression * Op.op * expression * return * MemOrderOrAnnot.annot
@@ -96,6 +105,7 @@ type instruction =
   | InstrSRCU of expression * MemOrderOrAnnot.annot * expression option
   | Symb of string
   | PCall of string * expression list
+  | SCas of expression cas
 
 type parsedInstruction = instruction
 
@@ -117,6 +127,18 @@ let dump_expected expr =
   function
   | ExpctReg r -> "&"^r
   | ExpctMem m -> expr m
+
+let dump_cas expr {obj; exp; des; success; failure; strong} =
+  match success, failure with
+  | MemOrder.SC, MemOrder.SC ->
+      sprintf "atomic_compare_exchange_%s(%s,%s,%s)"
+        (dump_ws strong)
+        (expr obj) (dump_expected expr exp) (expr des)
+  | _ ->
+      sprintf "atomic_compare_exchange_%s_explicit(%s,%s,%s,%s,%s)"
+        (dump_ws strong)
+        (expr obj) (dump_expected expr exp) (expr des)
+        (MemOrder.pp_mem_order success) (MemOrder.pp_mem_order failure)
 
 let rec dump_expr =
   let open MemOrderOrAnnot in
@@ -147,16 +169,7 @@ let rec dump_expr =
           (MemOrder.pp_mem_order mo)
     | ECall(f,es) ->
         sprintf "%s(%s)" f (dump_args es)
-    | ECas(e1,e2,e3,MemOrder.SC,MemOrder.SC,strong) ->
-        sprintf "atomic_compare_exchange_%s(%s,%s,%s)"
-          (dump_ws strong)
-          (dump_expr e1) (dump_expected dump_expr e2) (dump_expr e3)
-
-    | ECas(e1,e2,e3,mo1,mo2,strong) ->
-        sprintf "atomic_compare_exchange_%s_explicit(%s,%s,%s,%s,%s)"
-          (dump_ws strong)
-          (dump_expr e1) (dump_expected dump_expr e2) (dump_expr e3)
-          (MemOrder.pp_mem_order mo1) (MemOrder.pp_mem_order mo2)
+    | ECas c -> dump_cas dump_expr c
     | TryLock (_,MutexC11) -> assert false
     | TryLock (e,MutexLinux) ->
         sprintf "spin_trylock(%s)" (dump_expr e)
@@ -235,6 +248,7 @@ let rec do_dump_instruction indent =
   | Symb s -> pindent "codevar:%s;" s
   | PCall (f,es) ->
       pindent "%s(%s);" f (dump_args es)
+  | SCas c -> pindent "%s;" (dump_cas dump_expr c)
 
 let dump_instruction = do_dump_instruction ""
 let dump_parsedInstruction = dump_instruction
@@ -257,6 +271,14 @@ include Pseudo.Make
       type pins = parsedInstruction
       type reg_arg = reg
 
+      let parsed_cas_tr expr {obj; exp; des; success; failure; strong} =
+        { obj= expr obj
+        ; exp= map_expected expr exp
+        ; des= expr des
+        ; success
+        ; failure
+        ; strong
+        }
 
       let rec parsed_expr_tr =
         let open Constant in
@@ -275,10 +297,7 @@ include Pseudo.Make
           | Fetch(l,op,e,mo) ->
               Fetch(parsed_expr_tr l,op,parsed_expr_tr e,mo)
           | ECall (f,es) -> ECall (f,List.map parsed_expr_tr es)
-          | ECas (e1,e2,e3,mo1,mo2,strong) ->
-              ECas
-                (parsed_expr_tr e1,map_expected parsed_expr_tr e2,parsed_expr_tr e3,
-                 mo1,mo2,strong)
+          | ECas c -> ECas (parsed_cas_tr parsed_expr_tr c)
           | TryLock(e,m) -> TryLock(parsed_expr_tr e,m)
           | IsLocked(e,m) -> IsLocked(parsed_expr_tr e,m)
           | AtomicOpReturn (loc,op,e,ret,a) ->
@@ -307,12 +326,19 @@ include Pseudo.Make
         | InstrSRCU(e,a,oe) -> InstrSRCU(parsed_expr_tr e,a,Misc.app_opt parsed_expr_tr oe)
         | Symb _ -> Warn.fatal "No term variable allowed"
         | PCall (f,es) -> PCall (f,List.map parsed_expr_tr es)
+        | SCas c -> SCas (parsed_cas_tr parsed_expr_tr c)
 
       let get_naccesses =
         (* TODO(@MattWindsor91): is this correct? *)
         let get_expected expr k = function
           | ExpctMem e -> expr k e
           | ExpctReg _ -> k
+        in
+
+        let get_cas expr k {obj; exp; des; _} =
+          let k = expr k obj in
+          let k = get_expected expr k exp in
+          expr k des
         in
 
         let rec get_exp k = function
@@ -331,10 +357,7 @@ include Pseudo.Make
               let k = get_exp k e1 in
               let k = get_exp k e2 in
               get_exp k e3
-          | ECas (e1,e2,e3,_,_,_) ->
-              let k = get_exp k e1 in
-              let k = get_expected get_exp k e2 in
-              get_exp k e3
+          | ECas c -> get_cas get_exp k c
           | TryLock(e,_) -> get_exp (k+1) e
           | IsLocked(e,_) -> get_exp (k+1) e
           | ExpSRCU(e,_) ->  get_exp (k+1) e in
@@ -352,6 +375,7 @@ include Pseudo.Make
           | Lock (e,_)|Unlock (e,_) -> get_exp (k+1) e
           | InstrSRCU(e,_,oe) -> get_exp (match oe with None -> k+1 | Some e -> get_exp (k+1) e) e
           | PCall (_,es) ->  List.fold_left get_exp k es
+          | SCas c -> get_cas get_exp k c
 
         and get_opt k = function
           | None -> k
@@ -400,11 +424,14 @@ let rec build_frame f tr xs es = match xs,es with
 | x::xs,e::es -> StringMap.add x (tr e) (build_frame f tr xs es)
 | _,_ -> Warn.user_error "Argument mismatch for macro %s" f
 
-let subst_expected expr env = function
-  | ExpctMem e -> ExpctMem (expr env e)
-  | ExpctReg r ->
-    (* TODO(@MattWindsor91): is this correct? *)
-    ExpctReg r
+let subst_cas expr {obj;exp;des;success;failure;strong} =
+  { obj= expr obj
+  ; exp=map_expected expr exp (* TODO(@MattWindsor91): is this correct? *)
+  ; des= expr des
+  ; success
+  ; failure
+  ; strong
+  }
 
 let rec subst_expr env e = match e with
 | LoadReg r ->
@@ -420,11 +447,7 @@ let rec subst_expr env e = match e with
     let xs,e = find_macro f env.expr in
     let frame = build_frame f (subst_expr env) xs es in
     subst_expr { env with args = frame; } e
-| ECas (e1,e2,e3,mo1,mo2,strong) ->
-    let e1 = subst_expr env e1
-    and e2 = subst_expected subst_expr env e2
-    and e3 = subst_expr env e3 in
-    ECas (e1,e2,e3,mo1,mo2,strong)
+| ECas c -> ECas (subst_cas (subst_expr env) c)
 | TryLock (e,m) -> TryLock(subst_expr env e,m)
 | IsLocked (e,m) -> IsLocked(subst_expr env e,m)
 | AtomicOpReturn (loc,op,e,ret,a) ->
@@ -464,6 +487,7 @@ let rec subst env i = match i with
     let xs,body = find_macro f env.proc in
     let frame = build_frame f (subst_expr env) xs es in
     subst { env with args = frame; } body
+| SCas c -> SCas (subst_cas (subst_expr env) c)
 
 let expand ms = match ms with
 | [] -> Misc.identity

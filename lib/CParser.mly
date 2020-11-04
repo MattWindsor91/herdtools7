@@ -199,14 +199,8 @@ expr1:
   { Fetch($3, $1, $5, $7) }
 | IDENTIFIER LPAR args RPAR
   { ECall ($1,$3) }
-| WCAS LPAR expr COMMA expected COMMA expr RPAR
-  { ECas ($3,$5,$7,SC,SC,false) }
-| WCAS_EXPLICIT LPAR expr COMMA expected COMMA expr COMMA MEMORDER COMMA MEMORDER  RPAR
-  { ECas ($3,$5,$7,$9,$11,false) }
-| SCAS LPAR expr COMMA expected COMMA expr RPAR
-  { ECas ($3,$5,$7,SC,SC,true) }
-| SCAS_EXPLICIT LPAR expr COMMA expected COMMA expr COMMA MEMORDER COMMA MEMORDER  RPAR
-  { ECas ($3,$5,$7,$9,$11,true) }
+| cas
+  { ECas $1 }
 | SPINTRYLOCK LPAR expr RPAR
   { TryLock ($3,MutexLinux) }
 | SPINISLOCKED LPAR expr RPAR
@@ -219,6 +213,16 @@ expr1:
   { AtomicAddUnless($3,$5,$7,false) }
 | ATOMICADDUNLESS LPAR expr COMMA expr COMMA expr RPAR
   { AtomicAddUnless($3,$5,$7,true) }
+
+cas:
+| WCAS LPAR expr COMMA expected COMMA expr RPAR
+  { {obj=$3;exp=$5;des=$7;success=SC;failure=SC;strong=false} }
+| WCAS_EXPLICIT LPAR expr COMMA expected COMMA expr COMMA MEMORDER COMMA MEMORDER RPAR
+  { {obj=$3;exp=$5;des=$7;success=$9;failure=$11;strong=false} }
+| SCAS LPAR expr COMMA expected COMMA expr RPAR
+  { {obj=$3;exp=$5;des=$7;success=SC;failure=SC;strong=true} }
+| SCAS_EXPLICIT LPAR expr COMMA expected COMMA expr COMMA MEMORDER COMMA MEMORDER RPAR
+  { {obj=$3;exp=$5;des=$7;success=$9;failure=$11;strong=true} }
 
 args:
 | { [] }
@@ -278,6 +282,8 @@ instruction:
   { Symb $1 }
 | IDENTIFIER LPAR args RPAR SEMI
   { PCall ($1,$3) }
+| cas SEMI
+  { SCas $1 }
 
 ins_seq:
 | block_ins { [$1] }

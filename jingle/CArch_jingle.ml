@@ -153,6 +153,13 @@ include Arch.MakeArch(struct
         conv_reg r >! fun r -> ExpctReg r
     in
 
+    let expl_cas expr {obj; exp; des; success; failure; strong} =
+      expr obj >> fun obj ->
+      expl_expected expr exp >> fun exp ->
+      expr des >! fun des ->
+      {obj; exp; des; success; failure; strong}
+    in
+
     let rec expl_expr = let open Constant in function
       | Const(Symbolic ((s,_,_),_)) -> find_cst s >! fun k -> Const k
       | Const(Concrete _|Label _|Tag _) as e -> unitT e
@@ -177,11 +184,7 @@ include Arch.MakeArch(struct
           Fetch(loc,op,e,mo)
       | ECall (f,es) ->
           mapT expl_expr es >! fun es -> ECall (f,es)
-      | ECas (e1,e2,e3,mo1,mo2,st) ->
-          expl_expr e1 >> fun e1 ->
-          expl_expected expl_expr e2 >> fun e2 ->
-          expl_expr e3 >! fun e3 ->
-          ECas (e1,e2,e3,mo1,mo2,st)
+      | ECas c -> expl_cas expl_expr c >! fun c -> ECas c
       | TryLock(e,m) -> expl_expr e >! fun e -> TryLock(e,m)
       | IsLocked(e,m) -> expl_expr e >! fun e -> IsLocked(e,m)
       | AtomicOpReturn (loc,op,e,ret,a) ->
@@ -224,6 +227,7 @@ include Arch.MakeArch(struct
     | PCall (f,es) ->
         mapT expl_expr es >! fun es ->
         PCall (f,es)
+    | SCas c -> expl_cas expl_expr c >! fun c -> SCas c
     | AtomicOp(e1,op,e2) ->
         expl_expr e1 >> fun e1 ->
         expl_expr e2 >! fun e2 ->

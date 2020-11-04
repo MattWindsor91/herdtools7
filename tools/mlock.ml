@@ -80,6 +80,17 @@ module Top(O:Config)(Out:OutTests.S) = struct
   and const_zero = ParsedConstant.intToV 0
 
   let expand_pseudo_code =
+    let tr_cas expr {obj;exp;des;success;failure;strong} =
+      (* TODO(@MattWindsor91): is `map_expected` right here? *)
+        { obj=expr obj
+        ; exp=map_expected expr exp
+        ; des=expr des
+        ; success
+        ; failure
+        ; strong
+        }
+    in
+
     let rec tr_expr e = match e with
     | Const _|LoadReg _ -> e
     | ECall("spin_trylock",[e])
@@ -95,9 +106,7 @@ module Top(O:Config)(Out:OutTests.S) = struct
     | Exchange (e1,e2,a) ->  Exchange (tr_expr e1,tr_expr e2,a)
     | Fetch (e1,op,e2,a) -> Fetch (tr_expr e1,op,tr_expr e2,a)
     | ECall (f,es) -> ECall (f,List.map tr_expr es)
-    | ECas (e1,e2,e3,m1,m2,b) ->
-      (* TODO(@MattWindsor91): is `map_expected` right here? *)
-        ECas (tr_expr e1,map_expected tr_expr e2,tr_expr e3,m1,m2,b)
+    | ECas c -> ECas (tr_cas tr_expr c)
     | CmpExchange (loc,o,n,a) ->
         CmpExchange (tr_expr loc,tr_expr o,tr_expr n,a)
     | AtomicOpReturn (loc,op,u,ret,a) ->
@@ -154,6 +163,9 @@ module Top(O:Config)(Out:OutTests.S) = struct
         let eloc = tr_expr eloc in
         let oe = Misc.app_opt tr_expr oe in
         nxt,StringSet.empty,InstrSRCU(eloc,a,oe)
+    | SCas c ->
+      (* TODO(@MattWindsor91): is this correct? *)
+      nxt, StringSet.empty, SCas (tr_cas tr_expr c)
 
   and tr_code nxt = function
       | [] -> nxt,StringSet.empty,[]
@@ -214,6 +226,9 @@ module Top(O:Config)(Out:OutTests.S) = struct
     | ExpctMem e -> expr e
     | ExpctReg _ -> StringSet.empty (* TODO(@MattWindsor91): correct? *)
 
+  let cas_read expr {obj; exp; des; _} =
+    StringSet.union3 (expr obj) (expected_read expr exp) (expr des)
+
   let rec expr_read e = match e with
   | Const _|LoadReg _ -> StringSet.empty
   | ECall ("READ_ONCE", [LoadMem (LoadReg x,AN [])]) ->
@@ -225,8 +240,7 @@ module Top(O:Config)(Out:OutTests.S) = struct
   | Fetch (e1,_,e2,_)
   | AtomicOpReturn (e1,_,e2,_,_)
     -> StringSet.union (expr_read e1) (expr_read e2)
-  | ECas (e1,e2,e3,_,_,_) ->
-      StringSet.union3 (expr_read e1) (expected_read expr_read e2) (expr_read e3)
+  | ECas c -> cas_read expr_read c
   | CmpExchange(e1,e2,e3,_)
   | AtomicAddUnless (e1,e2,e3,_) ->
       StringSet.union3 (expr_read e1) (expr_read e2) (expr_read e3)
@@ -286,6 +300,7 @@ module Top(O:Config)(Out:OutTests.S) = struct
     | PCall (_,es) ->
         let s = exprs_read es in
         add_locks s i
+    | SCas c -> let s = cas_read expr_read c in add_locks s i
     | AtomicOp (loc,_,e) ->
         let s1 = expr_read loc and s2 = expr_read e in
         let s = StringSet.union s1 s2 in
@@ -324,7 +339,15 @@ module Top(O:Config)(Out:OutTests.S) = struct
 (********)
 
   let once_ins =
-
+    let tr_cas expr { obj; exp; des; success; failure; strong } =
+      { obj= expr obj
+      ; exp= map_expected expr exp
+      ; des= expr des
+      ; success
+      ; failure
+      ; strong
+      }
+    in
     let rec tr_expr e = match e with
     | Const _ | LoadReg _ -> e
     | LoadMem (LoadReg _,AN []) -> changed := true ; ECall ("READ_ONCE",[e])
@@ -333,8 +356,7 @@ module Top(O:Config)(Out:OutTests.S) = struct
     | Exchange  (e1,e2,a) -> Exchange (tr_expr e1,tr_expr e2,a)
     | Fetch (e1,op,e2,a) -> Fetch (tr_expr e1,op,tr_expr e2,a)
     | ECall (f,es) -> ECall (f,tr_exprs es)
-    | ECas (e1,e2,e3,a1,a2,b) ->
-        ECas (tr_expr e1,map_expected tr_expr e2,tr_expr e3,a1,a2,b)
+    | ECas c -> ECas (tr_cas tr_expr c)
     | TryLock (e,m) -> TryLock (tr_expr e,m)
     | IsLocked (e,m) -> IsLocked (tr_expr e,m)
     | CmpExchange (loc,o,n,a) ->
@@ -378,6 +400,7 @@ module Top(O:Config)(Out:OutTests.S) = struct
         | _ -> StoreMem (e1,e2,a)
         end
     | PCall (f,es) -> PCall (f,tr_exprs es)
+    | SCas c -> SCas (tr_cas tr_expr c)
     | AtomicOp (loc,op,e) -> AtomicOp(tr_expr loc,op,tr_expr e)
     | InstrSRCU(eloc,a,oe) -> InstrSRCU(tr_expr eloc,a,Misc.app_opt tr_expr oe) in
     tr_ins

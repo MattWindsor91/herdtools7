@@ -76,6 +76,9 @@ let list_loc prog =
     | ExpctMem e -> expr s e
     | ExpctReg r -> LocSet.add r s (* TODO(@MattWindsor91): correct? *)
   in
+  let cas expr s {obj; exp; des; _} =
+    expr (expected expr (expr s obj) exp) des
+  in
 
   let rec loc s e =  expr s e
   and expr s = function
@@ -90,7 +93,7 @@ let list_loc prog =
     | AtomicAddUnless(e1,e2,e3,_)
     | CmpExchange (e1,e2,e3,_) ->
       expr (expr (expr s e1) e2) e3
-    | ECas (e1,e2,e3,_,_,_) -> expr (expected expr (expr s e1) e2) e3
+    | ECas c -> cas expr s c
     | TryLock (e,_)|IsLocked (e,_)|ExpSRCU(e,_) -> expr s e in
 
   let rec ins s = function
@@ -110,6 +113,7 @@ let list_loc prog =
     | AtomicOp(e1,_,e2) -> expr (expr s e1) e2
     | InstrSRCU(e,_,None) -> expr s e
     | InstrSRCU(e,_,Some f) -> expr (expr s f) e
+    | SCas c -> cas expr s c
   in
   LocSet.elements (List.fold_left ins LocSet.empty prog)
 
