@@ -137,10 +137,22 @@ module Make (Conf:Config)(V:Value.S)
             M.mk_singleton_es
               (Act.Lock (A.Location_global loc,Act.LockLinux Dir.W)) ii
 
-      let build_semantics_expected (expr : C.expression -> V.v M.t) : C.expression C.expected -> V.v M.t =
+      let build_semantics_expected (expr : C.expression -> V.v M.t) : C.expression C.expected -> V.v C.expected M.t =
         function
-        | C.ExpctMem e -> expr e
-        | C.ExpctReg _ -> failwith "not supported yet: reg expecteds"
+        | C.ExpctMem e -> expr e >>= (fun v -> M.unitT (C.ExpctMem v))
+        | C.ExpctReg r -> M.unitT (C.ExpctReg r)
+
+      (* Non-atomically read the value of a CAS expected lvalue *)
+      let read_expected (exp : V.v C.expected) ii : V.v M.t =
+        match exp with
+        | C.ExpctMem m -> read_mem true no_mo m ii
+        | C.ExpctReg r -> read_reg true r ii
+
+      (* Non-atomically write a value to a CAS expected lvalue *)
+      let write_expected (exp : V.v C.expected) (v : V.v) ii : V.v M.t =
+        match exp with
+        | C.ExpctMem m -> write_mem no_mo m v ii
+        | C.ExpctReg r -> write_reg r v ii
 
       let rec build_semantics_expr is_data e ii : V.v M.t = match e with
       | C.Const v ->
@@ -243,14 +255,14 @@ module Make (Conf:Config)(V:Value.S)
             (* Obtain location of object *)
             build_semantics_expr false obj ii >>= fun loc_obj ->
               (* Non-atomically read the value at "expected" location *)
-              read_mem true no_mo loc_exp ii >>*= fun v_exp ->
+              read_expected loc_exp ii >>*= fun v_exp ->
                 (* Non-deterministic choice *)
                 M.altT
                   (read_mem true (mo_as_anmo failure) loc_obj ii >>*= fun v_obj ->
                     (* For "strong" cas: fail only when v_obj != v_exp *)
                     (if strong then M.neqT v_obj v_exp else M.unitT ()) >>= fun () ->
                       (* Non-atomically write that value into the "expected" location *)
-                      write_mem no_mo loc_exp v_obj ii >>!
+                      write_expected loc_exp v_obj ii >>!
                       V.zero)
                   (* Obtain "desired" value *)
                   (build_semantics_expr true des ii >>= fun v_des ->
