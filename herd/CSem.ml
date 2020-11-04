@@ -154,6 +154,35 @@ module Make (Conf:Config)(V:Value.S)
         | C.ExpctMem m -> write_mem no_mo m v ii
         | C.ExpctReg r -> write_reg r v ii
 
+      let build_semantics_ecas expr is_data obj exp des success failure strong ii =
+          (* Obtain location of "expected" value *)
+          build_semantics_expected (fun e -> expr false e ii) exp >>= fun loc_exp ->
+            (* Obtain location of object *)
+            expr false obj ii >>= fun loc_obj ->
+              (* Non-atomically read the value at "expected" location *)
+              read_expected loc_exp ii >>*= fun v_exp ->
+                (* Non-deterministic choice *)
+                M.altT
+                  (read_mem true (mo_as_anmo failure) loc_obj ii >>*= fun v_obj ->
+                    (* For "strong" cas: fail only when v_obj != v_exp *)
+                    (if strong then M.neqT v_obj v_exp else M.unitT ()) >>= fun () ->
+                      (* Non-atomically write that value into the "expected" location *)
+                      write_expected loc_exp v_obj ii >>!
+                      V.zero)
+                  (* Obtain "desired" value *)
+                  (expr true des ii >>= fun v_des ->
+                    if Conf.variant Variant.NoRMW then
+                      let re = expr true des ii
+                      and rloc = expr false obj ii in
+                      cxchg is_data rloc re success (Some v_exp) ii >>!
+                      V.one
+                    else
+                      (* Do RMW action on "object", to change its value from "expected"
+                         to "desired", using memory order "success" *)
+                      M.mk_singleton_es
+                        (Act.RMW (A.Location_global loc_obj,v_exp,v_des,success,nat_sz)) ii >>!
+                      V.one)
+
       let rec build_semantics_expr is_data e ii : V.v M.t = match e with
       | C.Const v ->
           M.unitT (V.maybevToV v)
@@ -250,35 +279,7 @@ module Make (Conf:Config)(V:Value.S)
 
 
       | C.ECas(obj,exp,des,success,failure,strong) ->
-          (* Obtain location of "expected" value *)
-          build_semantics_expected (fun e -> build_semantics_expr false e ii) exp >>= fun loc_exp ->
-            (* Obtain location of object *)
-            build_semantics_expr false obj ii >>= fun loc_obj ->
-              (* Non-atomically read the value at "expected" location *)
-              read_expected loc_exp ii >>*= fun v_exp ->
-                (* Non-deterministic choice *)
-                M.altT
-                  (read_mem true (mo_as_anmo failure) loc_obj ii >>*= fun v_obj ->
-                    (* For "strong" cas: fail only when v_obj != v_exp *)
-                    (if strong then M.neqT v_obj v_exp else M.unitT ()) >>= fun () ->
-                      (* Non-atomically write that value into the "expected" location *)
-                      write_expected loc_exp v_obj ii >>!
-                      V.zero)
-                  (* Obtain "desired" value *)
-                  (build_semantics_expr true des ii >>= fun v_des ->
-                    if Conf.variant Variant.NoRMW then
-                      let re = build_semantics_expr true des ii
-                      and rloc = build_semantics_expr false obj ii in
-                      cxchg is_data rloc re success (Some v_exp) ii >>!
-                      V.one
-                    else
-                      (* Do RMW action on "object", to change its value from "expected"
-                         to "desired", using memory order "success" *)
-                      M.mk_singleton_es
-                        (Act.RMW (A.Location_global loc_obj,v_exp,v_des,success,nat_sz)) ii >>!
-                      V.one)
-
-
+        build_semantics_ecas build_semantics_expr is_data obj exp des success failure strong ii
 
       | C.AtomicOpReturn (eloc,op,e,ret,a) ->
           begin match a with
