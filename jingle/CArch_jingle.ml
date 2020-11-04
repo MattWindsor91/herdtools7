@@ -146,6 +146,13 @@ include Arch.MakeArch(struct
       in aux subs,st
     in
 
+    let expl_expected expr = function
+      | ExpctMem e -> expr e >! fun e -> ExpctMem e
+      | ExpctReg r ->
+        (* TODO(@MattWindsor91): is this correct? *)
+        conv_reg r >! fun r -> ExpctReg r
+    in
+
     let rec expl_expr = let open Constant in function
       | Const(Symbolic ((s,_,_),_)) -> find_cst s >! fun k -> Const k
       | Const(Concrete _|Label _|Tag _) as e -> unitT e
@@ -172,7 +179,7 @@ include Arch.MakeArch(struct
           mapT expl_expr es >! fun es -> ECall (f,es)
       | ECas (e1,e2,e3,mo1,mo2,st) ->
           expl_expr e1 >> fun e1 ->
-          expl_expr e2 >> fun e2 ->
+          expl_expected expl_expr e2 >> fun e2 ->
           expl_expr e3 >! fun e3 ->
           ECas (e1,e2,e3,mo1,mo2,st)
       | TryLock(e,m) -> expl_expr e >! fun e -> TryLock(e,m)

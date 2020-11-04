@@ -200,13 +200,13 @@ expr1:
 | IDENTIFIER LPAR args RPAR
   { ECall ($1,$3) }
 | WCAS LPAR expr COMMA expr COMMA expr RPAR
-  { ECas ($3,$5,$7,SC,SC,false) }
+  { ECas ($3,ExpctMem $5,$7,SC,SC,false) }
 | WCAS_EXPLICIT LPAR expr COMMA expr COMMA expr COMMA MEMORDER COMMA MEMORDER  RPAR
-  { ECas ($3,$5,$7,$9,$11,false) }
+  { ECas ($3,ExpctMem $5,$7,$9,$11,false) }
 | SCAS LPAR expr COMMA expr COMMA expr RPAR
-  { ECas ($3,$5,$7,SC,SC,true) }
+  { ECas ($3,ExpctMem $5,$7,SC,SC,true) }
 | SCAS_EXPLICIT LPAR expr COMMA expr COMMA expr COMMA MEMORDER COMMA MEMORDER  RPAR
-  { ECas ($3,$5,$7,$9,$11,true) }
+  { ECas ($3,ExpctMem $5,$7,$9,$11,true) }
 | SPINTRYLOCK LPAR expr RPAR
   { TryLock ($3,MutexLinux) }
 | SPINISLOCKED LPAR expr RPAR

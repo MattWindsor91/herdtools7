@@ -55,6 +55,17 @@ type mutex_kind = MutexLinux | MutexC11
 
 type return = OpReturn | FetchOp
 
+(* Can either be an expression relating to a memory address, or &r where r is a
+   reg. *)
+type 'e expected =
+  | ExpctReg of reg
+  | ExpctMem of 'e
+
+let map_expected expr =
+  function
+  | ExpctMem m -> ExpctMem (expr m)
+  | ExpctReg r -> ExpctReg r
+
 type expression =
   | Const of ParsedConstant.v
   | LoadReg of reg
@@ -64,7 +75,7 @@ type expression =
   | CmpExchange of expression * expression * expression  * MemOrderOrAnnot.annot
   | Fetch of expression * Op.op * expression * mem_order
   | ECall of string * expression list
-  | ECas of expression * expression * expression * mem_order * mem_order * bool
+  | ECas of expression * expression expected * expression * mem_order * mem_order * bool
   | TryLock of expression * mutex_kind
   | IsLocked of expression * mutex_kind
   | AtomicOpReturn of expression * Op.op * expression * return * MemOrderOrAnnot.annot
@@ -102,6 +113,11 @@ let dump_ws = function
   | true  -> "strong"
   | false -> "weak"
 
+let dump_expected expr =
+  function
+  | ExpctReg r -> "&"^r
+  | ExpctMem m -> expr m
+
 let rec dump_expr =
   let open MemOrderOrAnnot in
   function
@@ -134,12 +150,12 @@ let rec dump_expr =
     | ECas(e1,e2,e3,MemOrder.SC,MemOrder.SC,strong) ->
         sprintf "atomic_compare_exchange_%s(%s,%s,%s)"
           (dump_ws strong)
-          (dump_expr e1) (dump_expr e2) (dump_expr e3)
+          (dump_expr e1) (dump_expected dump_expr e2) (dump_expr e3)
 
     | ECas(e1,e2,e3,mo1,mo2,strong) ->
         sprintf "atomic_compare_exchange_%s_explicit(%s,%s,%s,%s,%s)"
           (dump_ws strong)
-          (dump_expr e1) (dump_expr e2) (dump_expr e3)
+          (dump_expr e1) (dump_expected dump_expr e2) (dump_expr e3)
           (MemOrder.pp_mem_order mo1) (MemOrder.pp_mem_order mo2)
     | TryLock (_,MutexC11) -> assert false
     | TryLock (e,MutexLinux) ->
@@ -241,6 +257,7 @@ include Pseudo.Make
       type pins = parsedInstruction
       type reg_arg = reg
 
+
       let rec parsed_expr_tr =
         let open Constant in
         function
@@ -260,7 +277,7 @@ include Pseudo.Make
           | ECall (f,es) -> ECall (f,List.map parsed_expr_tr es)
           | ECas (e1,e2,e3,mo1,mo2,strong) ->
               ECas
-                (parsed_expr_tr e1,parsed_expr_tr e2,parsed_expr_tr e3,
+                (parsed_expr_tr e1,map_expected parsed_expr_tr e2,parsed_expr_tr e3,
                  mo1,mo2,strong)
           | TryLock(e,m) -> TryLock(parsed_expr_tr e,m)
           | IsLocked(e,m) -> IsLocked(parsed_expr_tr e,m)
@@ -292,6 +309,11 @@ include Pseudo.Make
         | PCall (f,es) -> PCall (f,List.map parsed_expr_tr es)
 
       let get_naccesses =
+        (* TODO(@MattWindsor91): is this correct? *)
+        let get_expected expr k = function
+          | ExpctMem e -> expr k e
+          | ExpctReg _ -> k
+        in
 
         let rec get_exp k = function
           | Const _ -> k
@@ -305,10 +327,13 @@ include Pseudo.Make
           | AtomicAddUnless (loc,a,u,_) ->
               get_exp (get_exp (get_exp (k+2) u) a) loc
           | ECall (_,es) -> List.fold_left get_exp k es
-          | CmpExchange (e1,e2,e3,_)
-          | ECas (e1,e2,e3,_,_,_) ->
+          | CmpExchange (e1,e2,e3,_) ->
               let k = get_exp k e1 in
               let k = get_exp k e2 in
+              get_exp k e3
+          | ECas (e1,e2,e3,_,_,_) ->
+              let k = get_exp k e1 in
+              let k = get_expected get_exp k e2 in
               get_exp k e3
           | TryLock(e,_) -> get_exp (k+1) e
           | IsLocked(e,_) -> get_exp (k+1) e
@@ -375,6 +400,11 @@ let rec build_frame f tr xs es = match xs,es with
 | x::xs,e::es -> StringMap.add x (tr e) (build_frame f tr xs es)
 | _,_ -> Warn.user_error "Argument mismatch for macro %s" f
 
+let subst_expected expr env = function
+  | ExpctMem e -> ExpctMem (expr env e)
+  | ExpctReg r ->
+    (* TODO(@MattWindsor91): is this correct? *)
+    ExpctReg r
 
 let rec subst_expr env e = match e with
 | LoadReg r ->
@@ -392,7 +422,7 @@ let rec subst_expr env e = match e with
     subst_expr { env with args = frame; } e
 | ECas (e1,e2,e3,mo1,mo2,strong) ->
     let e1 = subst_expr env e1
-    and e2 = subst_expr env e2
+    and e2 = subst_expected subst_expr env e2
     and e3 = subst_expr env e3 in
     ECas (e1,e2,e3,mo1,mo2,strong)
 | TryLock (e,m) -> TryLock(subst_expr env e,m)

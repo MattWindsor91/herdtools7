@@ -80,7 +80,6 @@ module Top(O:Config)(Out:OutTests.S) = struct
   and const_zero = ParsedConstant.intToV 0
 
   let expand_pseudo_code =
-
     let rec tr_expr e = match e with
     | Const _|LoadReg _ -> e
     | ECall("spin_trylock",[e])
@@ -97,7 +96,8 @@ module Top(O:Config)(Out:OutTests.S) = struct
     | Fetch (e1,op,e2,a) -> Fetch (tr_expr e1,op,tr_expr e2,a)
     | ECall (f,es) -> ECall (f,List.map tr_expr es)
     | ECas (e1,e2,e3,m1,m2,b) ->
-        ECas (tr_expr e1,tr_expr e2,tr_expr e3,m1,m2,b)
+      (* TODO(@MattWindsor91): is `map_expected` right here? *)
+        ECas (tr_expr e1,map_expected tr_expr e2,tr_expr e3,m1,m2,b)
     | CmpExchange (loc,o,n,a) ->
         CmpExchange (tr_expr loc,tr_expr o,tr_expr n,a)
     | AtomicOpReturn (loc,op,u,ret,a) ->
@@ -209,6 +209,10 @@ module Top(O:Config)(Out:OutTests.S) = struct
 
   let lock_params =
     List.map (fun ps -> List.fold_right lock_param ps [])
+  
+  let expected_read expr = function
+    | ExpctMem e -> expr e
+    | ExpctReg _ -> StringSet.empty (* TODO(@MattWindsor91): correct? *)
 
   let rec expr_read e = match e with
   | Const _|LoadReg _ -> StringSet.empty
@@ -221,7 +225,8 @@ module Top(O:Config)(Out:OutTests.S) = struct
   | Fetch (e1,_,e2,_)
   | AtomicOpReturn (e1,_,e2,_,_)
     -> StringSet.union (expr_read e1) (expr_read e2)
-  | ECas (e1,e2,e3,_,_,_)
+  | ECas (e1,e2,e3,_,_,_) ->
+      StringSet.union3 (expr_read e1) (expected_read expr_read e2) (expr_read e3)
   | CmpExchange(e1,e2,e3,_)
   | AtomicAddUnless (e1,e2,e3,_) ->
       StringSet.union3 (expr_read e1) (expr_read e2) (expr_read e3)
@@ -329,7 +334,7 @@ module Top(O:Config)(Out:OutTests.S) = struct
     | Fetch (e1,op,e2,a) -> Fetch (tr_expr e1,op,tr_expr e2,a)
     | ECall (f,es) -> ECall (f,tr_exprs es)
     | ECas (e1,e2,e3,a1,a2,b) ->
-        ECas (tr_expr e1,tr_expr e2,tr_expr e3,a1,a2,b)
+        ECas (tr_expr e1,map_expected tr_expr e2,tr_expr e3,a1,a2,b)
     | TryLock (e,m) -> TryLock (tr_expr e,m)
     | IsLocked (e,m) -> IsLocked (tr_expr e,m)
     | CmpExchange (loc,o,n,a) ->

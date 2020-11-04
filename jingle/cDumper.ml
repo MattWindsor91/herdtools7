@@ -72,6 +72,11 @@ let list_loc prog =
 	      let compare = reg_compare
 	    end) in
 
+  let expected expr s = function
+    | ExpctMem e -> expr s e
+    | ExpctReg r -> LocSet.add r s (* TODO(@MattWindsor91): correct? *)
+  in
+
   let rec loc s e =  expr s e
   and expr s = function
     | Const _ -> s
@@ -83,8 +88,9 @@ let list_loc prog =
     | Fetch(l,_,e,_) -> loc (expr s e) l
     | ECall (_,es) -> List.fold_left expr s es
     | AtomicAddUnless(e1,e2,e3,_)
-    | CmpExchange (e1,e2,e3,_)
-    | ECas (e1,e2,e3,_,_,_) -> expr (expr (expr s e1) e2) e3
+    | CmpExchange (e1,e2,e3,_) ->
+      expr (expr (expr s e1) e2) e3
+    | ECas (e1,e2,e3,_,_,_) -> expr (expected expr (expr s e1) e2) e3
     | TryLock (e,_)|IsLocked (e,_)|ExpSRCU(e,_) -> expr s e in
 
   let rec ins s = function

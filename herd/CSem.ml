@@ -137,6 +137,11 @@ module Make (Conf:Config)(V:Value.S)
             M.mk_singleton_es
               (Act.Lock (A.Location_global loc,Act.LockLinux Dir.W)) ii
 
+      let build_semantics_expected (expr : C.expression -> V.v M.t) : C.expression C.expected -> V.v M.t =
+        function
+        | C.ExpctMem e -> expr e
+        | C.ExpctReg _ -> failwith "not supported yet: reg expecteds"
+
       let rec build_semantics_expr is_data e ii : V.v M.t = match e with
       | C.Const v ->
           M.unitT (V.maybevToV v)
@@ -234,7 +239,7 @@ module Make (Conf:Config)(V:Value.S)
 
       | C.ECas(obj,exp,des,success,failure,strong) ->
           (* Obtain location of "expected" value *)
-          build_semantics_expr false exp ii >>= fun loc_exp ->
+          build_semantics_expected (fun e -> build_semantics_expr false e ii) exp >>= fun loc_exp ->
             (* Obtain location of object *)
             build_semantics_expr false obj ii >>= fun loc_obj ->
               (* Non-atomically read the value at "expected" location *)
